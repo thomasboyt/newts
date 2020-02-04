@@ -1,5 +1,3 @@
-import http from 'http';
-import url from 'url';
 import { TypeOf, TypeC } from 'io-ts';
 import {
   pathToRegexp,
@@ -8,12 +6,17 @@ import {
   MatchFunction,
 } from 'path-to-regexp';
 import validateOrThrow from './validateOrThrow';
-import { HttpError } from './HttpError';
+import { Context as KoaUnsafeCtx, Next } from 'koa';
 
-export type ContextProvider<TCtx> = (
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  run: (ctx: TCtx) => Promise<void>
+/**
+ * A stricter version of Koa's context that does not allow accessing `ctx.state`
+ * or any property not defined on the base context.
+ */
+export type KoaContext = KoaUnsafeCtx & { state: never; [key: string]: never };
+
+export type RouterContextProvider<TRouterCtx> = (
+  kctx: KoaContext,
+  run: (routerCtx: TRouterCtx) => Promise<void>
 ) => Promise<any>;
 
 // probably forgetting something
@@ -33,14 +36,14 @@ type HTTPMethod =
 // Might be able to use function overloads or similar to better handle this.
 
 interface Route<
-  TCtx,
+  TRouterCtx,
   TParams extends TypeC<any> | undefined = undefined,
   TQuery extends TypeC<any> | undefined = undefined,
   TReturns extends TypeC<any> | undefined = undefined
 > {
   method: HTTPMethod;
   validators: Validators<TParams, TQuery, TReturns>;
-  handler: Handler<TCtx, TParams, TQuery, TReturns>;
+  handler: Handler<TRouterCtx, TParams, TQuery, TReturns>;
   keys: PathKey[];
   regexp: RegExp;
   // TODO: could this be typed more specifically?
@@ -58,12 +61,12 @@ interface Validators<
 }
 
 type Handler<
-  TCtx,
+  TRouterCtx,
   TParams extends TypeC<any> | undefined = undefined,
   TQuery extends TypeC<any> | undefined = undefined,
   TReturns extends TypeC<any> | undefined = undefined
 > = (
-  ctx: TCtx & {
+  routeCtx: TRouterCtx & {
     params: TParams extends undefined
       ? {}
       : TParams extends TypeC<any>
@@ -74,101 +77,96 @@ type Handler<
       : TQuery extends TypeC<any>
       ? TypeOf<TQuery>
       : {};
-  }
+  },
+  koaCtx: KoaContext
 ) => Promise<TReturns extends TypeC<any> ? TypeOf<TReturns> : void>;
 
-export class Router<TCtx> {
-  withContext: ContextProvider<TCtx>;
+export class Router<TRouterCtx extends {}> {
+  withContext: RouterContextProvider<TRouterCtx>;
 
-  routes: Route<TCtx, any, any, any>[] = [];
+  private _routes: Route<TRouterCtx, any, any, any>[] = [];
 
-  constructor(withContext: ContextProvider<TCtx>) {
+  // constructor<{}>();
+  // constructor<TRouterCtx>();
+  constructor(
+    withContext: RouterContextProvider<TRouterCtx> = (kctx, run) =>
+      run({} as TRouterCtx)
+  ) {
+    // if (!withContext) {
+    //   this.withContext = (kctx, run) => run({} as TRouterCtx);
+    // }
     this.withContext = withContext;
   }
 
-  route<
-    TParams extends TypeC<any> | undefined = undefined,
-    TQuery extends TypeC<any> | undefined = undefined,
-    TReturns extends TypeC<any> | undefined = undefined
-  >(
-    method: HTTPMethod,
-    path: string,
-    validators: Validators<TParams, TQuery, TReturns>,
-    handler: Handler<TCtx, TParams, TQuery, TReturns>
-  ) {
-    const { regexp, keys } = this.getRegexp(path, validators.params);
-    const match = regexpToFunction(regexp, keys);
+  get = this.routeCreatorForMethod('GET');
+  post = this.routeCreatorForMethod('POST');
+  put = this.routeCreatorForMethod('PUT');
+  patch = this.routeCreatorForMethod('PATCH');
+  delete = this.routeCreatorForMethod('DELETE');
+  head = this.routeCreatorForMethod('HEAD');
+  options = this.routeCreatorForMethod('OPTIONS');
 
-    this.routes.push({
-      method,
-      validators,
-      handler,
-      keys,
-      regexp,
-      match,
-    });
+  /**
+   * Returns a middleware to be `use()`d by your Koa app:
+   *
+   * ```ts
+   * const app = new Koa();
+   * const router = new Router();
+   * // ...define some routes...
+   * app.use(router.routes());
+   * ```
+   */
+  routes() {
+    return async (koaCtx: KoaContext, next: Next) => {
+      for (const route of this._routes) {
+        if (route.method === koaCtx.method && route.regexp.test(koaCtx.path)) {
+          await this.handleRoute(koaCtx, route);
+          // TODO: should next actually get called lol
+          await next();
+          return;
+        }
+      }
+    };
   }
 
   async handleRoute(
-    urlParts: url.UrlWithParsedQuery,
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
+    koaCtx: KoaContext,
     route: Route<
-      TCtx,
+      TRouterCtx,
       TypeC<any> | undefined,
       TypeC<any> | undefined,
       TypeC<any> | undefined
     >
   ) {
-    try {
-      await this.withContext(req, res, async (ctx) => {
-        const params = this.getParams(
-          route,
-          urlParts.pathname!,
-          route.validators.params
-        );
+    koaCtx.assert(koaCtx.request.accepts('application/json'), 406);
 
-        const query = this.getQuery(urlParts.query, route.validators.query);
+    await this.withContext(koaCtx, async (routerCtx) => {
+      const params = this.getParams(
+        route,
+        koaCtx.path,
+        route.validators.params
+      );
+      const query = this.getQuery(koaCtx.query, route.validators.query);
+      const routeCtx = { ...routerCtx, params, query };
 
-        const result = await route.handler({
-          ...ctx,
-          params,
-          query,
-        });
+      const result = await route.handler(routeCtx, koaCtx);
 
-        if (result) {
-          if (!route.validators.returns) {
-            throw new Error(
-              'got non-void result from handler but no return validator is set'
-            );
-          }
-          const parsedResult = validateOrThrow(
-            route.validators.returns!,
-            result
+      if (result) {
+        if (!route.validators.returns) {
+          throw new Error(
+            'got non-void result from handler but no return validator is set'
           );
-
-          const body = JSON.stringify(parsedResult);
-          res.statusCode = 200;
-          res.setHeader('content-type', 'application/json');
-          res.end(body, 'utf8');
-        } else {
-          res.statusCode = 204;
-          res.end();
         }
-      });
-    } catch (err) {
-      // TODO: implement an actual onError hook
-      if (err instanceof HttpError) {
-        const body = JSON.stringify(err.toJSON());
-        res.statusCode = err.statusCode;
-        res.setHeader('content-type', 'application/json');
-        res.end(body, 'utf8');
+        const parsedResult = validateOrThrow(route.validators.returns!, result);
+
+        const body = JSON.stringify(parsedResult);
+        koaCtx.status = 200;
+        koaCtx.set('content-type', 'application/json');
+        koaCtx.body = body;
       } else {
-        console.error(err);
-        res.statusCode = 500;
-        res.end();
+        koaCtx.status = 204;
       }
-    }
+    });
   }
 
   private getRegexp(
@@ -215,13 +213,15 @@ export class Router<TCtx> {
   }
 
   private getParams(
-    route: Route<TCtx, any, any, any>,
+    route: Route<TRouterCtx, any, any, any>,
     pathname: string,
     val: TypeC<any> | undefined
   ): { [key: string]: any } {
     if (!val) {
       return {};
     }
+
+    // TODO:
     const match = route.match(pathname);
 
     if (!match) {
@@ -243,5 +243,31 @@ export class Router<TCtx> {
 
     const validated = validateOrThrow(val!, query);
     return validated;
+  }
+
+  private routeCreatorForMethod(method: HTTPMethod) {
+    return <
+      TParams extends TypeC<any> | undefined = undefined,
+      TQuery extends TypeC<any> | undefined = undefined,
+      TReturns extends TypeC<any> | undefined = undefined
+    >(
+      path: string,
+      validators: Validators<TParams, TQuery, TReturns>,
+      handler: Handler<TRouterCtx, TParams, TQuery, TReturns>
+    ) => {
+      const { regexp, keys } = this.getRegexp(path, validators.params);
+      const match = regexpToFunction(regexp, keys, {
+        decode: decodeURIComponent,
+      });
+
+      this._routes.push({
+        method,
+        validators,
+        handler,
+        keys,
+        regexp,
+        match,
+      });
+    };
   }
 }

@@ -1,31 +1,39 @@
 {
-  "name": "newts",
+  "name": "@tboyt/tusk",
   "version": "0.0.1",
-  "description": "???",
-  "main": ".prettierrc.js",
+  "description": "type-safe routing for koa",
+  "main": "dist/main.js",
   "scripts": {
+    "build": "tsc",
     "example": "nodemon --watch 'example/**/*.ts' --watch 'src/**/*.ts' --exec 'ts-node' example/example.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "Thomas Boyt <me@thomasboyt.com>",
+  "license": "MIT",
   "devDependencies": {
     "@tboyt/jareth": "^0.2.0",
+    "@types/jest": "^25.1.1",
     "@types/node": "^13.7.0",
+    "@types/supertest": "^2.0.8",
     "@typescript-eslint/eslint-plugin": "^2.19.0",
     "@typescript-eslint/parser": "^2.19.0",
     "eslint": "^6.8.0",
     "eslint-config-prettier": "^6.10.0",
+    "jest": "^25.1.0",
     "nodemon": "^2.0.2",
     "prettier": "^1.19.1",
+    "supertest": "^4.0.2",
+    "ts-jest": "^25.2.0",
     "ts-node": "^8.6.2",
     "typescript": "^3.7.5"
   },
   "dependencies": {
+    "@types/koa": "^2.11.0",
     "@types/path-to-regexp": "^1.7.0",
     "fp-ts": "^2.4.3",
     "io-ts": "^2.0.6",
     "io-ts-types": "^0.5.5",
+    "koa": "^2.11.0",
     "path-to-regexp": "^6.1.0"
   }
 }

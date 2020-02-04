@@ -23,5 +23,5 @@
     "rootDir": ".",
     "outDir": "dist"
   },
-  "exclude": ["dist"]
+  "include": ["src"]
 }

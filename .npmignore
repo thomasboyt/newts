@@ -1,0 +1,11 @@
+.vscode/
+node_modules/
+spec/
+src/
+.eslintrc.json
+.gitignore
+.npmignore
+.npmrc
+.prettierrc.js
+jest.config.js
+tsconfig.json

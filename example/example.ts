@@ -1,4 +1,5 @@
-import { Newts, ContextProvider, HttpError } from '../src';
+import Koa from 'koa';
+import { RouterContextProvider, Router } from '../src';
 
 import * as t from 'io-ts';
 import { IntFromString } from 'io-ts-types/lib/IntFromString';
@@ -10,13 +11,11 @@ interface AppContext {
   currentUser: User | null;
 }
 
-function buildContext(db: Jareth): ContextProvider<AppContext> {
-  return (req, res, run) => {
+function buildRouterContext(db: Jareth): RouterContextProvider<AppContext> {
+  return (koaCtx, run) => {
     return db.withHandle(async (handle) => {
-      // TODO: node headers have a really dumb type signature because set-cookie
-      // can be an array: https://nodejs.org/api/http.html#http_message_headers
-      // should maybe add a `getHeader()` helper
-      const authToken = req.headers['x-auth-token'] as string | undefined;
+      // TODO: fix koa's type def for this; it always returns string :|
+      const authToken = koaCtx.get('x-auth-token') as string | undefined;
 
       const currentUser = await getUserFromAuthToken(handle, authToken);
 
@@ -32,16 +31,13 @@ function buildContext(db: Jareth): ContextProvider<AppContext> {
 function main() {
   const db = new Jareth('postgres://postgres:@localhost:5433/jambuds');
 
-  const app = new Newts();
+  const app = new Koa();
 
   // each router can have its own context. this could make it easy to have e.g.
   // auth vs unauth routers
-  const router = app.router(buildContext(db));
+  const router = new Router(buildRouterContext(db));
 
-  // this should eventually be router.get, router.post, etc. for now it's easier
-  // to only define one method lol
-  router.route(
-    'GET',
+  router.get(
     '/users/:id',
     {
       query: t.type({
@@ -55,17 +51,16 @@ function main() {
         queryParam: t.union([t.string, t.undefined]),
       }),
     },
-    async (ctx) => {
-      const user = await getUserById(ctx.handle, ctx.params.id);
+    async (routeCtx) => {
+      const user = await getUserById(routeCtx.handle, routeCtx.params.id);
       return {
         name: user.name,
-        queryParam: ctx.query.param,
+        queryParam: routeCtx.query.param,
       };
     }
   );
 
-  router.route(
-    'GET',
+  router.get(
     '/me',
     {
       returns: t.type({
@@ -73,17 +68,19 @@ function main() {
         id: t.number,
       }),
     },
-    async (ctx) => {
-      if (!ctx.currentUser) {
-        throw new HttpError(401, 'unauthorized: no user');
+    async (routeCtx, koaCtx) => {
+      if (!routeCtx.currentUser) {
+        throw koaCtx.throw(401, 'unauthorized');
       }
 
       return {
-        name: ctx.currentUser.name,
-        id: ctx.currentUser.id,
+        name: routeCtx.currentUser.name,
+        id: routeCtx.currentUser.id,
       };
     }
   );
+
+  app.use(router.routes());
 
   app.listen(4000);
 }
