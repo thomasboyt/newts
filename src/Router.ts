@@ -86,15 +86,10 @@ export class Router<TRouterCtx extends {}> {
 
   private _routes: Route<TRouterCtx, any, any, any>[] = [];
 
-  // constructor<{}>();
-  // constructor<TRouterCtx>();
   constructor(
     withContext: RouterContextProvider<TRouterCtx> = (kctx, run) =>
       run({} as TRouterCtx)
   ) {
-    // if (!withContext) {
-    //   this.withContext = (kctx, run) => run({} as TRouterCtx);
-    // }
     this.withContext = withContext;
   }
 
