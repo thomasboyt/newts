@@ -49,15 +49,15 @@ type Handler<
 > = (
   ctx: TCtx & {
     params: TParams extends undefined
-      ? never
+      ? {}
       : TParams extends TypeC<any>
       ? TypeOf<TParams>
-      : never;
+      : {};
     query: TQuery extends undefined
-      ? never
+      ? {}
       : TQuery extends TypeC<any>
       ? TypeOf<TQuery>
-      : never;
+      : {};
   }
 ) => Promise<TReturns extends TypeC<any> ? TypeOf<TReturns> : void>;
 
@@ -91,7 +91,7 @@ class Router<TCtx> {
     });
   }
 
-  handleRoute(
+  async handleRoute(
     urlParts: url.UrlWithStringQuery,
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -102,60 +102,76 @@ class Router<TCtx> {
       TypeC<any> | undefined
     >
   ) {
-    // first: apply context
-    this.withContext(async (ctx) => {
-      const paramsValidator = route.validators.params;
+    // TODO: move this somewhere else
+    function getParams<T extends TypeC<any> | undefined>(
+      val: T
+    ): { [key: string]: any } {
+      if (val) {
+        // TODO: cache the fn here on Route
+        const match = regexpToFunction(
+          route.regexp,
+          route.keys
+        )(urlParts.pathname!);
 
-      function getParams<T extends TypeC<any> | undefined>(
-        val: T
-      ): { [key: string]: any } | null {
-        if (val) {
-          // TODO: cache the fn here on Route
-          const match = regexpToFunction(
-            route.regexp,
-            route.keys
-          )(urlParts.pathname!);
-
-          if (!match) {
-            throw new Error("couldn't match");
-          }
-
-          const paramsFromPath = match.params;
-          const params = validateOrThrow(val!, paramsFromPath);
-          return params;
-        } else {
-          return null;
+        if (!match) {
+          throw new Error("couldn't match");
         }
-      }
 
-      const params = getParams(paramsValidator);
-
-      // const queryValidator = route.validators.query;
-
-      // if (queryValidator) {
-      //   const search = urlParts.query;
-      //   const params = validateOrThrow(queryValidator!, search);
-      //   ctx = { ...ctx, ...params };
-      // }
-
-      // TODO: type checking this seems basically impossible
-      const result = await route.handler({ ...ctx, params } as any);
-
-      if (result) {
-        // validate result
-        if (!route.validators.returns) {
-          throw new Error(
-            'got non-void result from handler but no returns is set'
-          );
-        }
-        const parsedResult = validateOrThrow(route.validators.returns!, result);
-
-        const body = JSON.stringify(parsedResult);
-        console.log(body);
+        const paramsFromPath = match.params;
+        const params = validateOrThrow(val!, paramsFromPath);
+        return params;
       } else {
-        // 204 no content
+        return {};
       }
-    });
+    }
+
+    try {
+      await this.withContext(async (ctx) => {
+        const paramsValidator = route.validators.params;
+
+        const params = getParams(paramsValidator);
+
+        // const queryValidator = route.validators.query;
+
+        // if (queryValidator) {
+        //   const search = urlParts.query;
+        //   const params = validateOrThrow(queryValidator!, search);
+        //   ctx = { ...ctx, ...params };
+        // }
+
+        const result = await route.handler({
+          ...ctx,
+          params,
+          query: {
+            // TODO
+          },
+        });
+
+        if (result) {
+          if (!route.validators.returns) {
+            throw new Error(
+              'got non-void result from handler but no return validator is set'
+            );
+          }
+          const parsedResult = validateOrThrow(
+            route.validators.returns!,
+            result
+          );
+
+          const body = JSON.stringify(parsedResult);
+          res.statusCode = 200;
+          res.setHeader('content-type', 'application/json');
+          res.end(body, 'utf8');
+        } else {
+          res.statusCode = 204;
+          res.end();
+        }
+      });
+    } catch (err) {
+      console.error(err);
+      res.statusCode = 500;
+      res.end();
+    }
   }
 
   private getRegexp(
@@ -242,6 +258,8 @@ export class Newts {
       }
     }
 
-    console.error('TODO: 404 route not found sry');
+    // TODO: write something to the body here
+    res.statusCode = 404;
+    res.end();
   }
 }
