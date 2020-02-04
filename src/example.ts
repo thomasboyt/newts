@@ -1,12 +1,13 @@
 import { Newts } from './main';
 import * as t from 'io-ts';
+import { IntFromString } from 'io-ts-types/lib/IntFromString';
 import Jareth, { Handle } from '@tboyt/jareth';
 
 interface AppContext {
   db: Handle;
 }
 
-const db = new Jareth('postgres://jambuds:@localhost:5433/jambuds');
+const db = new Jareth('postgres://postgres:@localhost:5433/jambuds');
 function withContext(run: (ctx: AppContext) => Promise<void>) {
   return db.withHandle(async (handle) => {
     const context = {
@@ -30,16 +31,16 @@ router.route(
   {
     // query: ...
     // body: ...
-    // params: t.type({
-    //   id: t.string,
-    // }),
+    params: t.type({
+      id: IntFromString,
+    }),
     returns: t.type({
       name: t.string,
     }),
   },
   async (ctx) => {
     const user = await ctx.db
-      .createQuery('select * from user where id=${id}')
+      .createQuery('select * from users where id=${id}')
       .one(
         { id: ctx.params.id },
         // This is just fake validation:

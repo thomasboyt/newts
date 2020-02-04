@@ -1,6 +1,6 @@
-import http, { IncomingMessage } from 'http';
+import http from 'http';
 import url from 'url';
-import { HasProps, TypeOf, TypeC } from 'io-ts';
+import { TypeOf, TypeC } from 'io-ts';
 import { pathToRegexp, Key as PathKey, regexpToFunction } from 'path-to-regexp';
 import validateOrThrow from './validateOrThrow';
 
@@ -22,7 +22,7 @@ interface Route<
   TCtx,
   TParams extends TypeC<any> | undefined = undefined,
   TQuery extends TypeC<any> | undefined = undefined,
-  TReturns extends HasProps | undefined = undefined
+  TReturns extends TypeC<any> | undefined = undefined
 > {
   method: HTTPMethod;
   validators: Validators<TParams, TQuery, TReturns>;
@@ -34,7 +34,7 @@ interface Route<
 interface Validators<
   TParams extends TypeC<any> | undefined = undefined,
   TQuery extends TypeC<any> | undefined = undefined,
-  TReturns extends HasProps | undefined = undefined
+  TReturns extends TypeC<any> | undefined = undefined
 > {
   params?: TParams;
   query?: TQuery;
@@ -45,7 +45,7 @@ type Handler<
   TCtx,
   TParams extends TypeC<any> | undefined = undefined,
   TQuery extends TypeC<any> | undefined = undefined,
-  TReturns extends HasProps | undefined = undefined
+  TReturns extends TypeC<any> | undefined = undefined
 > = (
   ctx: TCtx & {
     params: TParams extends undefined
@@ -59,12 +59,12 @@ type Handler<
       ? TypeOf<TQuery>
       : never;
   }
-) => Promise<TReturns extends HasProps ? TypeOf<TReturns> : void>;
+) => Promise<TReturns extends TypeC<any> ? TypeOf<TReturns> : void>;
 
 class Router<TCtx> {
   withContext: WithContext<TCtx>;
 
-  routes: Route[] = [];
+  routes: Route<TCtx, any, any, any>[] = [];
 
   constructor(withContext: WithContext<TCtx>) {
     this.withContext = withContext;
@@ -73,7 +73,7 @@ class Router<TCtx> {
   route<
     TParams extends TypeC<any> | undefined = undefined,
     TQuery extends TypeC<any> | undefined = undefined,
-    TReturns extends HasProps | undefined = undefined
+    TReturns extends TypeC<any> | undefined = undefined
   >(
     method: HTTPMethod,
     path: string,
@@ -91,32 +91,70 @@ class Router<TCtx> {
     });
   }
 
-  handleRoute<
-    TParams extends TypeC<any> | undefined,
-    TQuery extends TypeC<any> | undefined,
-    TReturns extends HasProps | undefined
-  >(
-    pathname: string,
-    req: http.ClientRequest,
+  handleRoute(
+    urlParts: url.UrlWithStringQuery,
+    req: http.IncomingMessage,
     res: http.ServerResponse,
-    route: Route<TCtx, TParams, TQuery, TReturns>
+    route: Route<
+      TCtx,
+      TypeC<any> | undefined,
+      TypeC<any> | undefined,
+      TypeC<any> | undefined
+    >
   ) {
     // first: apply context
     this.withContext(async (ctx) => {
-      // then: apply params & query
       const paramsValidator = route.validators.params;
 
-      if (paramsValidator) {
-        // TODO: cache the fn here on Route
-        const paramsFromPath = regexpToFunction(
-          route.regexp,
-          route.keys
-        )(pathname);
+      function getParams<T extends TypeC<any> | undefined>(
+        val: T
+      ): { [key: string]: any } | null {
+        if (val) {
+          // TODO: cache the fn here on Route
+          const match = regexpToFunction(
+            route.regexp,
+            route.keys
+          )(urlParts.pathname!);
 
-        const params = validateOrThrow(paramsValidator!, paramsFromPath);
-        ctx = { ...ctx, ...params };
+          if (!match) {
+            throw new Error("couldn't match");
+          }
+
+          const paramsFromPath = match.params;
+          const params = validateOrThrow(val!, paramsFromPath);
+          return params;
+        } else {
+          return null;
+        }
       }
-      const result = await route.handler(ctx);
+
+      const params = getParams(paramsValidator);
+
+      // const queryValidator = route.validators.query;
+
+      // if (queryValidator) {
+      //   const search = urlParts.query;
+      //   const params = validateOrThrow(queryValidator!, search);
+      //   ctx = { ...ctx, ...params };
+      // }
+
+      // TODO: type checking this seems basically impossible
+      const result = await route.handler({ ...ctx, params } as any);
+
+      if (result) {
+        // validate result
+        if (!route.validators.returns) {
+          throw new Error(
+            'got non-void result from handler but no returns is set'
+          );
+        }
+        const parsedResult = validateOrThrow(route.validators.returns!, result);
+
+        const body = JSON.stringify(parsedResult);
+        console.log(body);
+      } else {
+        // 204 no content
+      }
     });
   }
 
@@ -193,18 +231,17 @@ export class Newts {
     }
 
     const urlParts = url.parse(req.url);
+    const pathname = urlParts.pathname!;
 
     for (const router of this.routers) {
       for (const route of router.routes) {
-        if (
-          route.method === req.method &&
-          route.regexp.test(urlParts.pathname!)
-        ) {
-          router.handleRoute(req, res, route);
+        if (route.method === req.method && route.regexp.test(pathname)) {
+          router.handleRoute(urlParts, req, res, route);
+          return;
         }
       }
     }
 
-    throw new Error('TODO: 404 route not found sry');
+    console.error('TODO: 404 route not found sry');
   }
 }

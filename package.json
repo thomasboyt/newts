@@ -23,7 +23,9 @@
   },
   "dependencies": {
     "@types/path-to-regexp": "^1.7.0",
+    "fp-ts": "^2.4.3",
     "io-ts": "^2.0.6",
+    "io-ts-types": "^0.5.5",
     "path-to-regexp": "^6.1.0"
   }
 }
