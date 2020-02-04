@@ -1,6 +1,6 @@
 import Koa from 'koa';
 import * as t from 'io-ts';
-import { Router } from '../src';
+import { Router, RouterContextProvider } from '../src';
 import supertest from 'supertest';
 
 describe('tusk', () => {
@@ -30,25 +30,25 @@ describe('tusk', () => {
 
   it('supplies router context', async () => {
     const app = new Koa();
-    const router = new Router();
+    type AppContext = { message: string };
+    const fn: RouterContextProvider<AppContext> = async (kctx, run) =>
+      run({ message: 'hello world' });
+
+    const router = new Router(fn);
 
     router.get(
-      '/echo/:message',
+      '/hello',
       {
-        params: t.type({ message: t.string }),
-        query: t.type({ message: t.string }),
-        returns: t.type({ param: t.string, query: t.string }),
+        returns: t.type({ message: t.string }),
       },
       async (ctx) => {
-        return { param: ctx.params.message, query: ctx.query.message };
+        return { message: ctx.message };
       }
     );
 
     app.use(router.routes());
 
     const request = supertest(app.callback());
-    await request
-      .get('/echo/hello%20params?message=hello%20query')
-      .expect({ param: 'hello params', query: 'hello query' });
+    await request.get('/hello').expect({ message: 'hello world' });
   });
 });
