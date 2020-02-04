@@ -8,6 +8,7 @@ import {
   MatchFunction,
 } from 'path-to-regexp';
 import validateOrThrow from './validateOrThrow';
+import { HttpError } from './HttpError';
 
 export type ContextProvider<TCtx> = (
   req: http.IncomingMessage,
@@ -156,9 +157,17 @@ export class Router<TCtx> {
         }
       });
     } catch (err) {
-      console.error(err);
-      res.statusCode = 500;
-      res.end();
+      // TODO: implement an actual onError hook
+      if (err instanceof HttpError) {
+        const body = JSON.stringify(err.toJSON());
+        res.statusCode = err.statusCode;
+        res.setHeader('content-type', 'application/json');
+        res.end(body, 'utf8');
+      } else {
+        console.error(err);
+        res.statusCode = 500;
+        res.end();
+      }
     }
   }
 

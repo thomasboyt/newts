@@ -14,11 +14,7 @@ export async function getUserById(
 ): Promise<t.TypeOf<typeof UserCodec>> {
   const user = await handle
     .createQuery('select * from users where id=${id}')
-    .one(
-      { id: userId },
-      // This is just fake validation:
-      mapDecode(UserCodec)
-    );
+    .one({ id: userId }, mapDecode(UserCodec));
 
   return user;
 }

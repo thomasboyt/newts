@@ -1,5 +1,4 @@
-import { Newts } from '../src/main';
-import { ContextProvider } from '../src/Router';
+import { Newts, ContextProvider, HttpError } from '../src';
 
 import * as t from 'io-ts';
 import { IntFromString } from 'io-ts-types/lib/IntFromString';
@@ -17,7 +16,7 @@ function buildContext(db: Jareth): ContextProvider<AppContext> {
       // TODO: node headers have a really dumb type signature because set-cookie
       // can be an array: https://nodejs.org/api/http.html#http_message_headers
       // should maybe add a `getHeader()` helper
-      const authToken = req.headers['X-Auth-Token'] as string | undefined;
+      const authToken = req.headers['x-auth-token'] as string | undefined;
 
       const currentUser = await getUserFromAuthToken(handle, authToken);
 
@@ -61,6 +60,27 @@ function main() {
       return {
         name: user.name,
         queryParam: ctx.query.param,
+      };
+    }
+  );
+
+  router.route(
+    'GET',
+    '/me',
+    {
+      returns: t.type({
+        name: t.string,
+        id: t.number,
+      }),
+    },
+    async (ctx) => {
+      if (!ctx.currentUser) {
+        throw new HttpError(401, 'unauthorized: no user');
+      }
+
+      return {
+        name: ctx.currentUser.name,
+        id: ctx.currentUser.id,
       };
     }
   );
