@@ -11,8 +11,10 @@ export default function validateOrThrow<T extends IoTypeC>(
   const result = t.exact(codec).decode(obj);
 
   if (isLeft(result)) {
+    // TODO: this format kinda sucks
     const report = PathReporter.report(result).join('\n');
-    // TODO: encapsulate this
+    // TODO: create a specific error for this that can turn into a
+    // 400/422/whatever
     throw new Error(report);
   }
 
