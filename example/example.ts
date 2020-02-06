@@ -14,8 +14,7 @@ interface AppContext {
 function buildRouterContext(db: Jareth): RouterContextProvider<AppContext> {
   return (koaCtx, run) => {
     return db.withHandle(async (handle) => {
-      // TODO: fix koa's type def for this; it always returns string :|
-      const authToken = koaCtx.get('x-auth-token') as string | undefined;
+      const authToken = koaCtx.get('x-auth-token');
 
       const currentUser = await getUserFromAuthToken(handle, authToken);
 

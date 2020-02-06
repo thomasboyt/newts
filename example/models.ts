@@ -21,9 +21,9 @@ export async function getUserById(
 
 export async function getUserFromAuthToken(
   handle: Handle,
-  authToken: string | undefined
+  authToken: string
 ): Promise<t.TypeOf<typeof UserCodec> | null> {
-  if (!authToken) {
+  if (authToken === '') {
     return null;
   }
 
