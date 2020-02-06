@@ -21,7 +21,7 @@ tusk's goal is to solve two problems:
 
 ### parameters
 
-tusk uses [io-ts](https://github.com/gcanti/io-ts) to validate incoming route and query parameters. io-ts is a runtime dsl that corresponds to typescript types, and makes it trivially easy to extract a complex static type from a runtime type.
+tusk uses [io-ts](https://github.com/gcanti/io-ts) to validate incoming route and query parameters. io-ts is a runtime dsl that corresponds to typescript types, and makes it easy to extract a static type from a runtime type. while all incoming query and parameter types start as type `string,` io-ts codecs like `IntFromString` can be used to safely convert to other types.
 
 currently, io-ts is also used to validate return values as well, but this is kind of silly because the actual _type checking_ should be able to cover return values. i have considered adding some sort of json schema validation for this (as well as for json body types) instead, though i'm not happy with the boilerplate of both defining a json schema and the interface it represents.
 

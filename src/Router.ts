@@ -1,4 +1,4 @@
-import { TypeOf, TypeC } from 'io-ts';
+import { TypeC, TypeOf } from 'io-ts';
 import { Next } from 'koa';
 import {
   pathToRegexp,
@@ -8,6 +8,7 @@ import {
 } from 'path-to-regexp';
 import validateOrThrow from './validateOrThrow';
 import { KoaContext } from './KoaContext';
+import { validator, RuleMap, ValidationResult } from './validator';
 
 export type RouterContextProvider<TRouterCtx> = (
   kctx: KoaContext,
@@ -32,8 +33,8 @@ type HTTPMethod =
 
 interface Route<
   TRouterCtx,
-  TParams extends TypeC<any> | undefined = undefined,
-  TQuery extends TypeC<any> | undefined = undefined,
+  TParams extends RuleMap | undefined = undefined,
+  TQuery extends RuleMap | undefined = undefined,
   TReturns extends TypeC<any> | undefined = undefined
 > {
   method: HTTPMethod;
@@ -46,8 +47,8 @@ interface Route<
 }
 
 interface Validators<
-  TParams extends TypeC<any> | undefined = undefined,
-  TQuery extends TypeC<any> | undefined = undefined,
+  TParams extends RuleMap | undefined = undefined,
+  TQuery extends RuleMap | undefined = undefined,
   TReturns extends TypeC<any> | undefined = undefined
 > {
   params?: TParams;
@@ -57,20 +58,20 @@ interface Validators<
 
 type Handler<
   TRouterCtx,
-  TParams extends TypeC<any> | undefined = undefined,
-  TQuery extends TypeC<any> | undefined = undefined,
+  TParams extends RuleMap | undefined = undefined,
+  TQuery extends RuleMap | undefined = undefined,
   TReturns extends TypeC<any> | undefined = undefined
 > = (
   routeCtx: TRouterCtx & {
     params: TParams extends undefined
       ? {}
-      : TParams extends TypeC<any>
-      ? TypeOf<TParams>
+      : TParams extends RuleMap
+      ? ValidationResult<TParams>
       : {};
     query: TQuery extends undefined
       ? {}
-      : TQuery extends TypeC<any>
-      ? TypeOf<TQuery>
+      : TQuery extends RuleMap
+      ? ValidationResult<TQuery>
       : {};
   },
   koaCtx: KoaContext
@@ -123,8 +124,8 @@ export class Router<TRouterCtx extends {}> {
     koaCtx: KoaContext,
     route: Route<
       TRouterCtx,
-      TypeC<any> | undefined,
-      TypeC<any> | undefined,
+      RuleMap | undefined,
+      RuleMap | undefined,
       TypeC<any> | undefined
     >
   ) {
@@ -161,7 +162,7 @@ export class Router<TRouterCtx extends {}> {
 
   private getRegexp(
     path: string,
-    paramsValidator: TypeC<any> | undefined
+    paramsValidator: RuleMap | undefined
   ): { regexp: RegExp; keys: PathKey[] } {
     const keys: PathKey[] = [];
     const regexp = pathToRegexp(path, keys);
@@ -188,12 +189,12 @@ export class Router<TRouterCtx extends {}> {
 
     // ensure keys are present on both sides
     for (const key of routeKeyNames) {
-      if (!paramsValidator.props[key]) {
+      if (!paramsValidator[key]) {
         throw new Error(`missing route parameter :${key} in params validator`);
       }
     }
 
-    for (const key of Object.keys(paramsValidator.props)) {
+    for (const key of Object.keys(paramsValidator)) {
       if (!routeKeyNames.includes(key)) {
         throw new Error(`missing route parameter :${key} in route definition`);
       }
@@ -205,9 +206,9 @@ export class Router<TRouterCtx extends {}> {
   private getParams(
     route: Route<TRouterCtx, any, any, any>,
     pathname: string,
-    val: TypeC<any> | undefined
+    rules: RuleMap | undefined
   ): { [key: string]: any } {
-    if (!val) {
+    if (!rules) {
       return {};
     }
 
@@ -219,26 +220,26 @@ export class Router<TRouterCtx extends {}> {
     }
 
     const paramsFromPath = match.params;
-    const params = validateOrThrow(val!, paramsFromPath);
+    const params = validator(rules, paramsFromPath as {});
     return params;
   }
 
   private getQuery(
     query: { [key: string]: any },
-    val: TypeC<any> | undefined
+    rules: RuleMap | undefined
   ): { [key: string]: any } {
-    if (!val) {
+    if (!rules) {
       return {};
     }
 
-    const validated = validateOrThrow(val!, query);
+    const validated = validator(rules, query);
     return validated;
   }
 
   private routeCreatorForMethod(method: HTTPMethod) {
     return <
-      TParams extends TypeC<any> | undefined = undefined,
-      TQuery extends TypeC<any> | undefined = undefined,
+      TParams extends RuleMap | undefined = undefined,
+      TQuery extends RuleMap | undefined = undefined,
       TReturns extends TypeC<any> | undefined = undefined
     >(
       path: string,

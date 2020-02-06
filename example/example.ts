@@ -1,5 +1,5 @@
 import Koa from 'koa';
-import { RouterContextProvider, Router } from '../src';
+import { RouterContextProvider, Router, param } from '../src';
 
 import * as t from 'io-ts';
 import { IntFromString } from 'io-ts-types/lib/IntFromString';
@@ -39,12 +39,12 @@ function main() {
   router.get(
     '/users/:id',
     {
-      query: t.type({
-        param: t.union([t.string, t.undefined]),
-      }),
-      params: t.type({
-        id: IntFromString,
-      }),
+      query: {
+        param: param.optional(t.string),
+      },
+      params: {
+        id: param.required(IntFromString),
+      },
       returns: t.type({
         name: t.string,
         queryParam: t.union([t.string, t.undefined]),
