@@ -1,4 +1,5 @@
 import { TypeOf, TypeC } from 'io-ts';
+import { Next } from 'koa';
 import {
   pathToRegexp,
   Key as PathKey,
@@ -6,13 +7,7 @@ import {
   MatchFunction,
 } from 'path-to-regexp';
 import validateOrThrow from './validateOrThrow';
-import { Context as KoaUnsafeCtx, Next } from 'koa';
-
-/**
- * A stricter version of Koa's context that does not allow accessing `ctx.state`
- * or any property not defined on the base context.
- */
-export type KoaContext = KoaUnsafeCtx & { state: never; [key: string]: never };
+import { KoaContext } from './KoaContext';
 
 export type RouterContextProvider<TRouterCtx> = (
   kctx: KoaContext,
