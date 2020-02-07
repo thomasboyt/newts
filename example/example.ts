@@ -1,9 +1,9 @@
 import Koa from 'koa';
-import { Router, param, CustomContextProvider } from '../src';
-
 import * as t from 'io-ts';
 import { IntFromString } from 'io-ts-types/lib/IntFromString';
 import Jareth, { Handle } from '@tboyt/jareth';
+import { Router, param, CustomContextProvider } from '../src';
+
 import { getUserFromAuthToken, getUserById, User } from './models';
 
 interface AppContext {
@@ -65,8 +65,6 @@ function main() {
   router.get(
     '/me',
     {
-      params: {},
-      query: {},
       returns: t.type({
         name: t.string,
         id: t.number,
