@@ -1,6 +1,6 @@
 import Koa from 'koa';
 import * as t from 'io-ts';
-import { Router, RouterContextProvider, param } from '../src';
+import { Router, CustomContextProvider, param } from '../src';
 import supertest from 'supertest';
 
 describe('tusk', () => {
@@ -20,8 +20,8 @@ describe('tusk', () => {
           },
           returns: t.type({ param: t.string, query: t.string }),
         },
-        async (ctx) => {
-          return { param: ctx.params.message, query: ctx.query.message };
+        async ({ params, query }) => {
+          return { param: params.message, query: query.message };
         }
       );
 
@@ -48,7 +48,7 @@ describe('tusk', () => {
   it('supplies router context', async () => {
     const app = new Koa();
     type AppContext = { message: string };
-    const fn: RouterContextProvider<AppContext> = async (kctx, run) =>
+    const fn: CustomContextProvider<AppContext> = async (req, res, run) =>
       run({ message: 'hello world' });
 
     const router = new Router(fn);

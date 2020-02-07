@@ -9,11 +9,7 @@ import {
 import validateOrThrow from './validateOrThrow';
 import { KoaContext } from './KoaContext';
 import { validator, RuleMap, ValidationResult } from './validator';
-
-export type RouterContextProvider<TRouterCtx> = (
-  kctx: KoaContext,
-  run: (routerCtx: TRouterCtx) => Promise<void>
-) => Promise<any>;
+import { CustomContextProvider, TuskBaseCtx } from './types';
 
 // probably forgetting something
 type HTTPMethod =
@@ -25,21 +21,15 @@ type HTTPMethod =
   | 'HEAD'
   | 'OPTIONS';
 
-// TODO: Lots of hoops jumped through to make these potentially undefined and
-// handle that case, and since TS doesn't support generic union narrowing among
-// other issues it sucks to manage.
-//
-// Might be able to use function overloads or similar to better handle this.
-
 interface Route<
-  TRouterCtx,
-  TParams extends RuleMap | undefined = undefined,
-  TQuery extends RuleMap | undefined = undefined,
+  TCustomCtx,
+  TParams extends RuleMap,
+  TQuery extends RuleMap,
   TReturns extends TypeC<any> | undefined = undefined
 > {
   method: HTTPMethod;
   validators: Validators<TParams, TQuery, TReturns>;
-  handler: Handler<TRouterCtx, TParams, TQuery, TReturns>;
+  handler: Handler<TCustomCtx, any, any, TReturns>;
   keys: PathKey[];
   regexp: RegExp;
   // TODO: could this be typed more specifically?
@@ -47,6 +37,16 @@ interface Route<
 }
 
 interface Validators<
+  TParams extends RuleMap,
+  TQuery extends RuleMap,
+  TReturns extends TypeC<any> | undefined = undefined
+> {
+  params: TParams;
+  query: TQuery;
+  returns?: TReturns;
+}
+
+interface ValidatorsArg<
   TParams extends RuleMap | undefined = undefined,
   TQuery extends RuleMap | undefined = undefined,
   TReturns extends TypeC<any> | undefined = undefined
@@ -57,45 +57,30 @@ interface Validators<
 }
 
 type Handler<
-  TRouterCtx,
-  TParams extends RuleMap | undefined = undefined,
-  TQuery extends RuleMap | undefined = undefined,
+  TCustomCtx,
+  TParamResults extends ValidationResult<any>,
+  TQueryResults extends ValidationResult<any>,
   TReturns extends TypeC<any> | undefined = undefined
 > = (
-  routeCtx: TRouterCtx & {
-    params: TParams extends undefined
-      ? {}
-      : TParams extends RuleMap
-      ? ValidationResult<TParams>
-      : {};
-    query: TQuery extends undefined
-      ? {}
-      : TQuery extends RuleMap
-      ? ValidationResult<TQuery>
-      : {};
-  },
-  koaCtx: KoaContext
+  routeCtx: TCustomCtx & TuskBaseCtx<TParamResults, TQueryResults>
 ) => Promise<TReturns extends TypeC<any> ? TypeOf<TReturns> : void>;
 
-export class Router<TRouterCtx extends {}> {
-  withContext: RouterContextProvider<TRouterCtx>;
+export class Router<TCustomCtx extends {}> {
+  withContext: CustomContextProvider<TCustomCtx>;
 
-  private _routes: Route<TRouterCtx, any, any, any>[] = [];
+  private _routes: Route<
+    TCustomCtx,
+    RuleMap,
+    RuleMap,
+    TypeC<any> | undefined
+  >[] = [];
 
   constructor(
-    withContext: RouterContextProvider<TRouterCtx> = (kctx, run) =>
-      run({} as TRouterCtx)
+    withContext: CustomContextProvider<TCustomCtx> = (req, res, run) =>
+      run({} as TCustomCtx)
   ) {
     this.withContext = withContext;
   }
-
-  get = this.routeCreatorForMethod('GET');
-  post = this.routeCreatorForMethod('POST');
-  put = this.routeCreatorForMethod('PUT');
-  patch = this.routeCreatorForMethod('PATCH');
-  delete = this.routeCreatorForMethod('DELETE');
-  head = this.routeCreatorForMethod('HEAD');
-  options = this.routeCreatorForMethod('OPTIONS');
 
   /**
    * Returns a middleware to be `use()`d by your Koa app:
@@ -120,27 +105,42 @@ export class Router<TRouterCtx extends {}> {
     };
   }
 
-  async handleRoute(
+  /*
+   * -----------------
+   *  Route execution
+   * -----------------
+   */
+
+  async handleRoute<TParams extends RuleMap, TQuery extends RuleMap>(
     koaCtx: KoaContext,
-    route: Route<
-      TRouterCtx,
-      RuleMap | undefined,
-      RuleMap | undefined,
-      TypeC<any> | undefined
-    >
+    route: Route<TCustomCtx, TParams, TQuery, TypeC<any> | undefined>
   ) {
     koaCtx.assert(koaCtx.request.accepts('application/json'), 406);
 
-    await this.withContext(koaCtx, async (routerCtx) => {
+    const { req, res } = koaCtx;
+
+    await this.withContext(req, res, async (customCtx) => {
       const params = this.getParams(
-        route,
+        route.match,
         koaCtx.path,
         route.validators.params
       );
-      const query = this.getQuery(koaCtx.query, route.validators.query);
-      const routeCtx = { ...routerCtx, params, query };
 
-      const result = await route.handler(routeCtx, koaCtx);
+      const query = this.getQuery(koaCtx.query, route.validators.query);
+
+      const baseCtx: TuskBaseCtx<
+        ValidationResult<TParams>,
+        ValidationResult<TQuery>
+      > = {
+        req: koaCtx.req,
+        res: koaCtx.res,
+        params,
+        query,
+      };
+
+      const ctx = { ...baseCtx, ...customCtx };
+
+      const result = await route.handler(ctx);
 
       if (result) {
         if (!route.validators.returns) {
@@ -158,6 +158,81 @@ export class Router<TRouterCtx extends {}> {
         koaCtx.status = 204;
       }
     });
+  }
+
+  private getParams<T extends RuleMap>(
+    matchFn: MatchFunction<object>,
+    pathname: string,
+    rules: T
+  ): ValidationResult<T> {
+    const match = matchFn(pathname);
+
+    if (!match) {
+      throw new Error("couldn't match");
+    }
+
+    const paramsFromPath = match.params;
+    const params = validator(rules, paramsFromPath as {});
+    return params;
+  }
+
+  private getQuery<T extends RuleMap>(
+    query: { [key: string]: any },
+    rules: T
+  ): ValidationResult<T> {
+    const validated = validator(rules, query);
+    return validated;
+  }
+
+  /*
+   * ----------------
+   *  Route creation
+   * ----------------
+   */
+
+  get = this.routeCreatorForMethod('GET');
+  post = this.routeCreatorForMethod('POST');
+  put = this.routeCreatorForMethod('PUT');
+  patch = this.routeCreatorForMethod('PATCH');
+  delete = this.routeCreatorForMethod('DELETE');
+  head = this.routeCreatorForMethod('HEAD');
+  options = this.routeCreatorForMethod('OPTIONS');
+
+  private routeCreatorForMethod(method: HTTPMethod) {
+    return <
+      TParams extends RuleMap | undefined = undefined,
+      TQuery extends RuleMap | undefined = undefined,
+      TReturns extends TypeC<any> | undefined = undefined
+    >(
+      path: string,
+      validators: ValidatorsArg<TParams, TQuery, TReturns>,
+      handler: Handler<
+        TCustomCtx,
+        TParams extends RuleMap ? ValidationResult<TParams> : {},
+        TQuery extends RuleMap ? ValidationResult<TQuery> : {},
+        TReturns
+      >
+    ) => {
+      const { regexp, keys } = this.getRegexp(path, validators.params);
+      const match = regexpToFunction(regexp, keys, {
+        decode: decodeURIComponent,
+      });
+
+      const route = {
+        method,
+        validators: {
+          params: validators.params || {},
+          query: validators.params || {},
+          returns: validators.returns,
+        },
+        handler,
+        keys,
+        regexp,
+        match,
+      };
+
+      this._routes.push(route as Route<TCustomCtx, RuleMap, RuleMap, TReturns>);
+    };
   }
 
   private getRegexp(
@@ -201,64 +276,5 @@ export class Router<TRouterCtx extends {}> {
     }
 
     return { regexp, keys };
-  }
-
-  private getParams(
-    route: Route<TRouterCtx, any, any, any>,
-    pathname: string,
-    rules: RuleMap | undefined
-  ): { [key: string]: any } {
-    if (!rules) {
-      return {};
-    }
-
-    // TODO:
-    const match = route.match(pathname);
-
-    if (!match) {
-      throw new Error("couldn't match");
-    }
-
-    const paramsFromPath = match.params;
-    const params = validator(rules, paramsFromPath as {});
-    return params;
-  }
-
-  private getQuery(
-    query: { [key: string]: any },
-    rules: RuleMap | undefined
-  ): { [key: string]: any } {
-    if (!rules) {
-      return {};
-    }
-
-    const validated = validator(rules, query);
-    return validated;
-  }
-
-  private routeCreatorForMethod(method: HTTPMethod) {
-    return <
-      TParams extends RuleMap | undefined = undefined,
-      TQuery extends RuleMap | undefined = undefined,
-      TReturns extends TypeC<any> | undefined = undefined
-    >(
-      path: string,
-      validators: Validators<TParams, TQuery, TReturns>,
-      handler: Handler<TRouterCtx, TParams, TQuery, TReturns>
-    ) => {
-      const { regexp, keys } = this.getRegexp(path, validators.params);
-      const match = regexpToFunction(regexp, keys, {
-        decode: decodeURIComponent,
-      });
-
-      this._routes.push({
-        method,
-        validators,
-        handler,
-        keys,
-        regexp,
-        match,
-      });
-    };
   }
 }

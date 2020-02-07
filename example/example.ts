@@ -1,5 +1,5 @@
 import Koa from 'koa';
-import { RouterContextProvider, Router, param } from '../src';
+import { Router, param, CustomContextProvider } from '../src';
 
 import * as t from 'io-ts';
 import { IntFromString } from 'io-ts-types/lib/IntFromString';
@@ -11,12 +11,15 @@ interface AppContext {
   currentUser: User | null;
 }
 
-function buildRouterContext(db: Jareth): RouterContextProvider<AppContext> {
-  return (koaCtx, run) => {
+function buildRouterContext(db: Jareth): CustomContextProvider<AppContext> {
+  return (req, res, run) => {
     return db.withHandle(async (handle) => {
-      const authToken = koaCtx.get('x-auth-token');
+      const authToken = req.headers['x-auth-token'];
 
-      const currentUser = await getUserFromAuthToken(handle, authToken);
+      const currentUser =
+        typeof authToken === 'string'
+          ? await getUserFromAuthToken(handle, authToken)
+          : null;
 
       const context = {
         handle,
@@ -39,22 +42,22 @@ function main() {
   router.get(
     '/users/:id',
     {
-      query: {
-        param: param.optional(t.string),
-      },
       params: {
         id: param.required(IntFromString),
+      },
+      query: {
+        param: param.optional(t.string),
       },
       returns: t.type({
         name: t.string,
         queryParam: t.union([t.string, t.undefined]),
       }),
     },
-    async (routeCtx) => {
-      const user = await getUserById(routeCtx.handle, routeCtx.params.id);
+    async ({ params, query, handle }) => {
+      const user = await getUserById(handle, params.id);
       return {
         name: user.name,
-        queryParam: routeCtx.query.param,
+        queryParam: query.param,
       };
     }
   );
@@ -62,19 +65,23 @@ function main() {
   router.get(
     '/me',
     {
+      params: {},
+      query: {},
       returns: t.type({
         name: t.string,
         id: t.number,
       }),
     },
-    async (routeCtx, koaCtx) => {
-      if (!routeCtx.currentUser) {
-        throw koaCtx.throw(401, 'unauthorized');
+    async ({ currentUser }) => {
+      if (!currentUser) {
+        // TODO:
+        // throw koaCtx.throw(401, 'unauthorized');
+        throw new Error('unauthorized');
       }
 
       return {
-        name: routeCtx.currentUser.name,
-        id: routeCtx.currentUser.id,
+        name: currentUser.name,
+        id: currentUser.id,
       };
     }
   );
