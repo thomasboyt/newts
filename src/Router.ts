@@ -8,7 +8,12 @@ import {
 } from 'path-to-regexp';
 import validateOrThrow from './validateOrThrow';
 import { KoaContext } from './KoaContext';
-import { validator, RuleMap, ValidationResult } from './validator';
+import {
+  validator,
+  RuleMap,
+  ValidationResult,
+  ValidationErrorItem,
+} from './validator';
 import { CustomContextProvider, TuskBaseCtx } from './types';
 
 // probably forgetting something
@@ -116,17 +121,29 @@ export class Router<TCustomCtx extends {}> {
     route: Route<TCustomCtx, TParams, TQuery, TypeC<any> | undefined>
   ) {
     koaCtx.assert(koaCtx.request.accepts('application/json'), 406);
+    koaCtx.set('content-type', 'application/json');
 
     const { req, res } = koaCtx;
 
     await this.withContext(req, res, async (customCtx) => {
-      const params = this.getParams(
+      const [params, paramErrors] = this.getParams(
         route.match,
         koaCtx.path,
         route.validators.params
       );
 
-      const query = this.getQuery(koaCtx.query, route.validators.query);
+      if (paramErrors.length > 0) {
+        return this.returnValidationError(koaCtx, 'params', paramErrors);
+      }
+
+      const [query, queryErrors] = this.getQuery(
+        koaCtx.query,
+        route.validators.query
+      );
+
+      if (queryErrors.length > 0) {
+        return this.returnValidationError(koaCtx, 'query', queryErrors);
+      }
 
       const baseCtx: TuskBaseCtx<
         ValidationResult<TParams>,
@@ -152,7 +169,6 @@ export class Router<TCustomCtx extends {}> {
 
         const body = JSON.stringify(parsedResult);
         koaCtx.status = 200;
-        koaCtx.set('content-type', 'application/json');
         koaCtx.body = body;
       } else {
         koaCtx.status = 204;
@@ -164,7 +180,7 @@ export class Router<TCustomCtx extends {}> {
     matchFn: MatchFunction<object>,
     pathname: string,
     rules: T
-  ): ValidationResult<T> {
+  ): [ValidationResult<T>, ValidationErrorItem[]] {
     const match = matchFn(pathname);
 
     if (!match) {
@@ -172,16 +188,29 @@ export class Router<TCustomCtx extends {}> {
     }
 
     const paramsFromPath = match.params;
-    const params = validator(rules, paramsFromPath as {});
-    return params;
+    return validator(rules, paramsFromPath as {});
   }
 
   private getQuery<T extends RuleMap>(
     query: { [key: string]: any },
     rules: T
-  ): ValidationResult<T> {
-    const validated = validator(rules, query);
-    return validated;
+  ): [ValidationResult<T>, ValidationErrorItem[]] {
+    return validator(rules, query);
+  }
+
+  private returnValidationError(
+    koaCtx: KoaContext,
+    source: 'params' | 'query',
+    errors: ValidationErrorItem[]
+  ) {
+    const error = {
+      code: source === 'params' ? 'INVALID_PARAMS' : 'INVALID_QUERY',
+      message: `Invalid ${source === 'params' ? 'path' : 'query'} parameters`,
+      errors,
+    };
+    const body = JSON.stringify({ error });
+    koaCtx.status = 400;
+    koaCtx.body = body;
   }
 
   /*
@@ -222,7 +251,7 @@ export class Router<TCustomCtx extends {}> {
         method,
         validators: {
           params: validators.params || {},
-          query: validators.params || {},
+          query: validators.query || {},
           returns: validators.returns,
         },
         handler,

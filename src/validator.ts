@@ -24,12 +24,20 @@ export type ValidationResult<T extends RuleMap> = {
   [K in keyof T]: RuleType<T[K]>;
 };
 
+export interface ValidationErrorItem {
+  code: 'missingRequired' | 'invalid';
+  key: string;
+  type: string;
+  message?: string;
+}
+
 export function validator<T extends RuleMap>(
   rules: T,
   data: Record<string, unknown>
-): ValidationResult<T> {
+): [ValidationResult<T>, ValidationErrorItem[]] {
   const obj = {};
 
+  const errors: ValidationErrorItem[] = [];
   for (const key of Object.keys(rules)) {
     const rule = rules[key];
     const val = data[key];
@@ -37,7 +45,12 @@ export function validator<T extends RuleMap>(
     if (val === undefined) {
       if (rule['required']) {
         // TODO: return errors lol
-        throw new Error(`missing required param ${key}`);
+        const type = rule.type.name;
+        errors.push({
+          code: 'missingRequired',
+          key,
+          type,
+        });
       } else {
         obj[key] = undefined;
       }
@@ -48,14 +61,22 @@ export function validator<T extends RuleMap>(
 
       const result = rule.type.decode(val);
       if (isLeft(result)) {
-        throw new Error(`Invalid value ${val} supplied for ${key}`);
+        const err = result.left[0];
+        const type = err.context[0].type.name;
+        const error: ValidationErrorItem = {
+          code: 'invalid',
+          key,
+          type,
+          message: err.message,
+        };
+        errors.push(error);
+      } else {
+        obj[key] = result.right;
       }
-
-      obj[key] = result.right;
     }
   }
 
-  return obj as ValidationResult<T>;
+  return [obj as ValidationResult<T>, errors];
 }
 
 // param factories: because no one wants to use "as const" and we might want to

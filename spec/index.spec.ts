@@ -1,5 +1,6 @@
 import Koa from 'koa';
 import * as t from 'io-ts';
+import { DateFromISOString } from 'io-ts-types/lib/DateFromISOString';
 import { Router, CustomContextProvider, param } from '../src';
 import supertest from 'supertest';
 
@@ -17,11 +18,15 @@ describe('tusk', () => {
           },
           query: {
             message: param.required(t.string),
+            date: param.optional(DateFromISOString),
           },
           returns: t.type({ param: t.string, query: t.string }),
         },
         async ({ params, query }) => {
-          return { param: params.message, query: query.message };
+          return {
+            param: params.message,
+            query: query.message,
+          };
         }
       );
 
@@ -38,10 +43,34 @@ describe('tusk', () => {
         .expect({ param: 'hello params', query: 'hello query' });
     });
 
-    it('returns a 400 when invalid', async () => {
+    it('returns a 400 when missing a required query parameter', async () => {
       const app = makeApp();
       const request = supertest(app.callback());
       await request.get('/echo/hello%20params').expect(400);
+    });
+
+    it('returns a 400 when a query parameter is invalid', async () => {
+      const app = makeApp();
+      const request = supertest(app.callback());
+      const resp = await request
+        .get('/echo/hello%20params?message=foo&date=invalid-date')
+        .expect(400);
+
+      const expectedError = {
+        error: {
+          code: 'INVALID_QUERY',
+          message: 'Invalid query parameters',
+          errors: [
+            {
+              code: 'invalid',
+              key: 'date',
+              type: 'DateFromISOString',
+            },
+          ],
+        },
+      };
+
+      expect(resp.body).toEqual(expectedError);
     });
   });
 

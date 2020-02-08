@@ -4,7 +4,7 @@ tusk is a routing middleware for [koa](https://koajs.com/) that provides type-sa
 
 ## todos
 
-- [ ] throw 400 or 422 errors for validation errors
+- [x] return 400 or 422 errors for validation errors
   - [ ] come up with nice json format for these errors
   - [ ] potentially figure out how to extend nice format to json/json-schema?
 - [ ] add tests
