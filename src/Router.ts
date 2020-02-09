@@ -1,4 +1,3 @@
-import { TypeC, TypeOf } from 'io-ts';
 import { Next } from 'koa';
 import {
   pathToRegexp,
@@ -6,15 +5,25 @@ import {
   regexpToFunction,
   MatchFunction,
 } from 'path-to-regexp';
-import validateOrThrow from './validateOrThrow';
 import { KoaContext } from './KoaContext';
-import {
-  validator,
-  RuleMap,
-  ValidationResult,
-  ValidationErrorItem,
-} from './validator';
 import { CustomContextProvider, TuskBaseCtx } from './types';
+import { json as parseCtxJson } from 'co-body';
+
+import { Validated, createSchema, TsjsonParser } from 'ts-json-validator';
+// TODO: This should be exported from ts-json-validator, I think?
+import { SchemaLike, Schema } from 'ts-json-validator/dist/json-schema';
+
+import { SchemaValidationError } from './errors';
+
+const isObjectSchema = (s: unknown): s is Schema<'object', any, any> => {
+  return (
+    typeof s === 'object' &&
+    s !== null &&
+    s['type'] === 'object' &&
+    s['properties'] !== null &&
+    typeof s['properties'] === 'object'
+  );
+};
 
 // probably forgetting something
 type HTTPMethod =
@@ -28,13 +37,14 @@ type HTTPMethod =
 
 interface Route<
   TCustomCtx,
-  TParams extends RuleMap,
-  TQuery extends RuleMap,
-  TReturns extends TypeC<any> | undefined = undefined
+  TParams extends SchemaLike,
+  TQuery extends SchemaLike,
+  TBody extends SchemaLike,
+  TReturns extends SchemaLike | null
 > {
   method: HTTPMethod;
-  validators: Validators<TParams, TQuery, TReturns>;
-  handler: Handler<TCustomCtx, any, any, TReturns>;
+  validators: Validators<TParams, TQuery, TBody, TReturns>;
+  handler: Handler<TCustomCtx, any, any, any, any>;
   keys: PathKey[];
   regexp: RegExp;
   // TODO: could this be typed more specifically?
@@ -42,42 +52,48 @@ interface Route<
 }
 
 interface Validators<
-  TParams extends RuleMap,
-  TQuery extends RuleMap,
-  TReturns extends TypeC<any> | undefined = undefined
+  TParams extends SchemaLike,
+  TQuery extends SchemaLike,
+  TBody extends SchemaLike,
+  TReturns extends SchemaLike | null
 > {
   params: TParams;
   query: TQuery;
-  returns?: TReturns;
+  body: TBody;
+  returns: TReturns;
 }
 
 interface ValidatorsArg<
-  TParams extends RuleMap | undefined = undefined,
-  TQuery extends RuleMap | undefined = undefined,
-  TReturns extends TypeC<any> | undefined = undefined
+  TParams extends SchemaLike | undefined = undefined,
+  TQuery extends SchemaLike | undefined = undefined,
+  TBody extends SchemaLike | undefined = undefined,
+  TReturns extends SchemaLike | undefined = undefined
 > {
   params?: TParams;
   query?: TQuery;
+  body?: TBody;
   returns?: TReturns;
 }
 
 type Handler<
   TCustomCtx,
-  TParamResults extends ValidationResult<any>,
-  TQueryResults extends ValidationResult<any>,
-  TReturns extends TypeC<any> | undefined = undefined
+  TParamResults extends Validated<any>,
+  TQueryResults extends Validated<any>,
+  TParsedBody extends Validated<any>,
+  TReturns extends Validated<any> | void
 > = (
-  routeCtx: TCustomCtx & TuskBaseCtx<TParamResults, TQueryResults>
-) => Promise<TReturns extends TypeC<any> ? TypeOf<TReturns> : void>;
+  routeCtx: TCustomCtx & TuskBaseCtx<TParamResults, TQueryResults, TParsedBody>
+) => Promise<TReturns>;
 
 export class Router<TCustomCtx extends {}> {
   withContext: CustomContextProvider<TCustomCtx>;
 
   private _routes: Route<
     TCustomCtx,
-    RuleMap,
-    RuleMap,
-    TypeC<any> | undefined
+    SchemaLike,
+    SchemaLike,
+    SchemaLike,
+    SchemaLike | null
   >[] = [];
 
   constructor(
@@ -116,9 +132,14 @@ export class Router<TCustomCtx extends {}> {
    * -----------------
    */
 
-  async handleRoute<TParams extends RuleMap, TQuery extends RuleMap>(
+  async handleRoute<
+    TParams extends SchemaLike,
+    TQuery extends SchemaLike,
+    TBody extends SchemaLike,
+    TReturns extends SchemaLike | null
+  >(
     koaCtx: KoaContext,
-    route: Route<TCustomCtx, TParams, TQuery, TypeC<any> | undefined>
+    route: Route<TCustomCtx, TParams, TQuery, TBody, TReturns>
   ) {
     koaCtx.assert(koaCtx.request.accepts('application/json'), 406);
     koaCtx.set('content-type', 'application/json');
@@ -126,61 +147,97 @@ export class Router<TCustomCtx extends {}> {
     const { req, res } = koaCtx;
 
     await this.withContext(req, res, async (customCtx) => {
-      const [params, paramErrors] = this.getParams(
-        route.match,
-        koaCtx.path,
-        route.validators.params
-      );
-
-      if (paramErrors.length > 0) {
-        return this.returnValidationError(koaCtx, 'params', paramErrors);
+      // TODO: use result types here...
+      let params;
+      try {
+        params = this.parseParams(
+          route.match,
+          koaCtx.path,
+          route.validators.params
+        );
+      } catch (err) {
+        if (err instanceof SchemaValidationError) {
+          return this.returnSchemaValidationError(koaCtx, 'parameters', err);
+        }
+        throw err;
       }
 
-      const [query, queryErrors] = this.getQuery(
-        koaCtx.query,
-        route.validators.query
-      );
+      let query;
+      try {
+        query = this.parseQuery(koaCtx.query, route.validators.query);
+      } catch (err) {
+        if (err instanceof SchemaValidationError) {
+          return this.returnSchemaValidationError(koaCtx, 'query', err);
+        }
+        throw err;
+      }
 
-      if (queryErrors.length > 0) {
-        return this.returnValidationError(koaCtx, 'query', queryErrors);
+      let body;
+      try {
+        body = this.parseBody(
+          await parseCtxJson(koaCtx),
+          route.validators.body
+        );
+      } catch (err) {
+        if (err instanceof SchemaValidationError) {
+          return this.returnSchemaValidationError(koaCtx, 'body', err);
+        }
+        throw err;
       }
 
       const baseCtx: TuskBaseCtx<
-        ValidationResult<TParams>,
-        ValidationResult<TQuery>
+        Validated<TParams>,
+        Validated<TQuery>,
+        Validated<TBody>
       > = {
         req: koaCtx.req,
         res: koaCtx.res,
+        body: body,
         params,
         query,
       };
 
       const ctx = { ...baseCtx, ...customCtx };
 
+      // Call and validate response
       const result = await route.handler(ctx);
 
-      if (result) {
-        if (!route.validators.returns) {
-          throw new Error(
-            'got non-void result from handler but no return validator is set'
-          );
-        }
-        const parsedResult = validateOrThrow(route.validators.returns!, result);
-
-        const body = JSON.stringify(parsedResult);
-        koaCtx.status = 200;
-        koaCtx.body = body;
-      } else {
+      if (!result) {
+        // 204 no content :)
         koaCtx.status = 204;
+        return;
       }
+
+      if (!route.validators.returns) {
+        throw new Error(
+          'got non-void result from handler but no return validator is set'
+        );
+      }
+
+      const returnParser = new TsjsonParser(route.validators.body);
+
+      if (!returnParser.validates(result)) {
+        const errors = returnParser.getErrors();
+        console.error(
+          'Invalid response returned from handler for:',
+          koaCtx.method,
+          koaCtx.path
+        );
+        console.error(errors);
+        throw new Error('Invalid response returned from handler');
+      }
+
+      const responseBody = JSON.stringify(result);
+      koaCtx.status = 200;
+      koaCtx.body = responseBody;
     });
   }
 
-  private getParams<T extends RuleMap>(
+  private parseParams<T extends SchemaLike>(
     matchFn: MatchFunction<object>,
     pathname: string,
-    rules: T
-  ): [ValidationResult<T>, ValidationErrorItem[]] {
+    schema: T
+  ): Validated<T> {
     const match = matchFn(pathname);
 
     if (!match) {
@@ -188,26 +245,71 @@ export class Router<TCustomCtx extends {}> {
     }
 
     const paramsFromPath = match.params;
-    return validator(rules, paramsFromPath as {});
+
+    const queryParser = new TsjsonParser(schema, { coerceTypes: true });
+
+    if (!queryParser.validates(paramsFromPath)) {
+      const errors = queryParser.getErrors();
+      throw new SchemaValidationError(errors!);
+    }
+
+    return paramsFromPath;
   }
 
-  private getQuery<T extends RuleMap>(
-    query: { [key: string]: any },
-    rules: T
-  ): [ValidationResult<T>, ValidationErrorItem[]] {
-    return validator(rules, query);
+  private parseQuery<T extends SchemaLike>(
+    query: unknown,
+    schema: T
+  ): Validated<T> {
+    const queryParser = new TsjsonParser(schema, { coerceTypes: true });
+
+    if (!queryParser.validates(query)) {
+      const errors = queryParser.getErrors();
+      throw new SchemaValidationError(errors!);
+    }
+
+    return query;
   }
 
-  private returnValidationError(
+  private parseBody<T extends SchemaLike>(
+    body: unknown,
+    schema: T
+  ): Validated<T> {
+    const queryParser = new TsjsonParser(schema);
+
+    if (!queryParser.validates(body)) {
+      const errors = queryParser.getErrors();
+      throw new SchemaValidationError(errors!);
+    }
+
+    return body;
+  }
+
+  // private returnParamValidationError(
+  //   koaCtx: KoaContext,
+  //   err: SchemaVa
+  // ) {
+  //   const error = {
+  //     code: 'INVALID_PARAMETER',
+  //     message: `Invalid path parameter ${err.key}`,
+  //     validationError: err.error,
+  //   };
+
+  //   const body = JSON.stringify({ error });
+  //   koaCtx.status = 400;
+  //   koaCtx.body = body;
+  // }
+
+  private returnSchemaValidationError(
     koaCtx: KoaContext,
-    source: 'params' | 'query',
-    errors: ValidationErrorItem[]
+    type: 'parameters' | 'query' | 'body',
+    err: SchemaValidationError
   ) {
     const error = {
-      code: source === 'params' ? 'INVALID_PARAMS' : 'INVALID_QUERY',
-      message: `Invalid ${source === 'params' ? 'path' : 'query'} parameters`,
-      errors,
+      code: `INVALID_${type.toUpperCase()}`,
+      message: `Invalid ${type}`,
+      validationErrors: err.errors,
     };
+
     const body = JSON.stringify({ error });
     koaCtx.status = 400;
     koaCtx.body = body;
@@ -229,17 +331,19 @@ export class Router<TCustomCtx extends {}> {
 
   private routeCreatorForMethod(method: HTTPMethod) {
     return <
-      TParams extends RuleMap | undefined = undefined,
-      TQuery extends RuleMap | undefined = undefined,
-      TReturns extends TypeC<any> | undefined = undefined
+      TParams extends SchemaLike | undefined = undefined,
+      TQuery extends SchemaLike | undefined = undefined,
+      TBody extends SchemaLike | undefined = undefined,
+      TReturns extends SchemaLike | undefined = undefined
     >(
       path: string,
-      validators: ValidatorsArg<TParams, TQuery, TReturns>,
+      validators: ValidatorsArg<TParams, TQuery, TBody, TReturns>,
       handler: Handler<
         TCustomCtx,
-        TParams extends RuleMap ? ValidationResult<TParams> : {},
-        TQuery extends RuleMap ? ValidationResult<TQuery> : {},
-        TReturns
+        TParams extends SchemaLike ? Validated<TParams> : {},
+        TQuery extends SchemaLike ? Validated<TQuery> : {},
+        TBody extends SchemaLike ? Validated<TBody> : {},
+        TReturns extends SchemaLike ? Validated<TReturns> : void
       >
     ) => {
       const { regexp, keys } = this.getRegexp(path, validators.params);
@@ -252,7 +356,8 @@ export class Router<TCustomCtx extends {}> {
         validators: {
           params: validators.params || {},
           query: validators.query || {},
-          returns: validators.returns,
+          body: validators.body || createSchema({ type: 'object' }),
+          returns: validators.returns || null,
         },
         handler,
         keys,
@@ -260,13 +365,21 @@ export class Router<TCustomCtx extends {}> {
         match,
       };
 
-      this._routes.push(route as Route<TCustomCtx, RuleMap, RuleMap, TReturns>);
+      this._routes.push(
+        route as Route<
+          TCustomCtx,
+          SchemaLike,
+          SchemaLike,
+          SchemaLike,
+          SchemaLike | null
+        >
+      );
     };
   }
 
   private getRegexp(
     path: string,
-    paramsValidator: RuleMap | undefined
+    paramsValidator: SchemaLike | undefined
   ): { regexp: RegExp; keys: PathKey[] } {
     const keys: PathKey[] = [];
     const regexp = pathToRegexp(path, keys);
@@ -281,6 +394,12 @@ export class Router<TCustomCtx extends {}> {
       return { regexp, keys };
     }
 
+    if (!isObjectSchema(paramsValidator)) {
+      throw new Error(
+        'params validator must be an object validator with properties'
+      );
+    }
+
     for (const key of keys) {
       if (typeof key.name === 'number') {
         throw new Error(
@@ -293,12 +412,12 @@ export class Router<TCustomCtx extends {}> {
 
     // ensure keys are present on both sides
     for (const key of routeKeyNames) {
-      if (!paramsValidator[key]) {
+      if (!paramsValidator.properties[key]) {
         throw new Error(`missing route parameter :${key} in params validator`);
       }
     }
 
-    for (const key of Object.keys(paramsValidator)) {
+    for (const key of Object.keys(paramsValidator.properties)) {
       if (!routeKeyNames.includes(key)) {
         throw new Error(`missing route parameter :${key} in route definition`);
       }

@@ -1,16 +1,18 @@
-import { ValidationResult } from './validator';
 import { IncomingMessage, ServerResponse } from 'http';
+import { Validated } from 'ts-json-validator';
 
 /**
  * The base context passed to a route handler. The custom context is mixed
  * into this to create the "tuskCtx" argument.
  */
 export type TuskBaseCtx<
-  TParams extends ValidationResult<any>,
-  TQuery extends ValidationResult<any>
+  TParams extends Validated<any>,
+  TQuery extends Validated<any>,
+  TParsedBody extends Validated<any>
 > = {
   params: TParams;
   query: TQuery;
+  body: TParsedBody;
   req: IncomingMessage;
   res: ServerResponse;
 };

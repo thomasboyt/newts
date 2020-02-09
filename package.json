@@ -28,12 +28,12 @@
     "typescript": "^3.7.5"
   },
   "dependencies": {
+    "@types/co-body": "0.0.3",
     "@types/koa": "^2.11.0",
     "@types/path-to-regexp": "^1.7.0",
-    "fp-ts": "^2.4.3",
-    "io-ts": "^2.0.6",
-    "io-ts-types": "^0.5.5",
+    "co-body": "^6.0.0",
     "koa": "^2.11.0",
-    "path-to-regexp": "^6.1.0"
+    "path-to-regexp": "^6.1.0",
+    "ts-json-validator": "git://github.com/thomasboyt/ts-json-validator.git#3f2965f"
   }
 }
