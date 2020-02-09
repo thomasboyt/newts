@@ -4,6 +4,7 @@ import * as t from 'io-ts';
 const UserCodec = t.type({
   name: t.string,
   id: t.number,
+  email: t.string,
 });
 
 export type User = t.TypeOf<typeof UserCodec>;

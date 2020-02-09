@@ -1,8 +1,7 @@
 import Koa from 'koa';
-import * as t from 'io-ts';
-import { IntFromString } from 'io-ts-types/lib/IntFromString';
+import { createSchema as S } from 'ts-json-validator';
 import Jareth, { Handle } from '@tboyt/jareth';
-import { Router, param, CustomContextProvider } from '../src';
+import { Router, CustomContextProvider } from '../src';
 
 import { getUserFromAuthToken, getUserById, User } from './models';
 
@@ -42,22 +41,33 @@ function main() {
   router.get(
     '/users/:id',
     {
-      params: {
-        id: param.required(IntFromString),
-      },
-      query: {
-        param: param.optional(t.string),
-      },
-      returns: t.type({
-        name: t.string,
-        queryParam: t.union([t.string, t.undefined]),
+      params: S({
+        type: 'object',
+        properties: {
+          id: S({ type: 'integer' }),
+        },
+        required: ['id'],
+      }),
+      query: S({
+        type: 'object',
+        properties: {
+          includeEmail: S({ type: 'boolean' }),
+        },
+      }),
+      returns: S({
+        type: 'object',
+        properties: {
+          name: S({ type: 'string' }),
+          email: S({ type: 'string' }),
+        },
+        required: ['name'],
       }),
     },
     async ({ params, query, handle }) => {
       const user = await getUserById(handle, params.id);
       return {
         name: user.name,
-        queryParam: query.param,
+        email: query.includeEmail ? user.email : undefined,
       };
     }
   );
@@ -65,9 +75,14 @@ function main() {
   router.get(
     '/me',
     {
-      returns: t.type({
-        name: t.string,
-        id: t.number,
+      returns: S({
+        type: 'object',
+        properties: {
+          name: S({ type: 'string' }),
+          id: S({ type: 'number' }),
+          email: S({ type: 'string' }),
+        },
+        required: ['name', 'id', 'email'],
       }),
     },
     async ({ currentUser }) => {
@@ -77,10 +92,13 @@ function main() {
         throw new Error('unauthorized');
       }
 
-      return {
+      const out = {
         name: currentUser.name,
         id: currentUser.id,
+        email: currentUser.email,
       };
+
+      return out;
     }
   );
 
